@@ -4,15 +4,12 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/golang/protobuf/jsonpb"
-	"github.com/golang/protobuf/proto"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/montanaflynn/stats"
 	"github.com/riferrei/srclient"
 	"github.com/xyproto/randomstring"
-
 	"os"
 	"reflect"
 	"regexp"
@@ -57,12 +54,12 @@ type TopicPartition struct {
 }
 
 type MessageInfo struct {
-	Key       string    `json:"key"`
-	Value     any       `json:"value"`
-	Timestamp time.Time `json:"timestamp"`
-	Partition int32     `json:"partition"`
-	Offset    int32     `json:"offset"`
-	Headers   []Header  `json:"headers"`
+	Key       string            `json:"key"`
+	Value     any               `json:"value"`
+	Timestamp time.Time         `json:"timestamp"`
+	Partition int32             `json:"partition"`
+	Offset    int32             `json:"offset"`
+	Headers   map[string]string `json:"headers"`
 }
 type Header struct {
 	Key   string `json:"key"`
@@ -345,9 +342,9 @@ func FastCountMessages(config kafka.ConfigMap, topic string, partitions int) Top
 }
 
 /*
-* Finds messages based on a regex pattern, optionally deserializes output based on schema registry
+* Grep messages based on a regex pattern, optionally deserializes output based on schema registry
  */
-func FindMessage(config kafka.ConfigMap, topic string, reg string, input string, flags map[string]string) []MessageInfo {
+func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string, flags map[string]string) []MessageInfo {
 	//Compile regex
 	regexFind, rerr := regexp.Compile(reg)
 	if rerr != nil {
@@ -359,7 +356,6 @@ func FindMessage(config kafka.ConfigMap, topic string, reg string, input string,
 	err = consumer.Subscribe(topic, nil)
 	if err != nil {
 		fmt.Println("Failed to subscribe topic: %s\n", err)
-		//run = false
 		os.Exit(1)
 	}
 	var ac, acerr = kafka.NewAdminClientFromConsumer(consumer)
@@ -399,10 +395,16 @@ func FindMessage(config kafka.ConfigMap, topic string, reg string, input string,
 			msgValue := string(e.Value)
 			msgKey := string(e.Key[:])
 			msgHeaders := e.Headers
-			outputHeaders := make([]Header, 0)
+
 			switch input {
 			case "json":
-				//_ = josn.Unmarshal(e.Value, &msgValue)
+				err := json.Unmarshal(e.Value, &msgValue)
+				if err != nil {
+					fmt.Printf("Error unmarshalling json %s\n", err)
+				}
+			case "proto":
+				fmt.Println("Cannot support protobuf at this time")
+				os.Exit(1)
 			case "avro":
 				schemaId := binary.BigEndian.Uint32(e.Value[1:5])
 				schema, err := srClient.GetSchema(int(schemaId))
@@ -427,9 +429,9 @@ func FindMessage(config kafka.ConfigMap, topic string, reg string, input string,
 			}
 
 			if isMatchValue || isMatchKey || isMatchHeaders {
-				//Create Header Json
+				outputHeaders := make(map[string]string)
 				for _, v := range msgHeaders {
-					outputHeaders = append(outputHeaders, Header{v.Key, string(v.Value[:])})
+					outputHeaders[v.Key] = string(v.Value[:])
 				}
 				msgInfo := MessageInfo{
 					string(msgKey),
@@ -492,6 +494,7 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 	sru := flags["schema.registry"]
 	sruser := flags["schema.registry.user"]
 	srpass := flags["schema.registry.password"]
+	//srclient create Schema Registry
 	srClient := srclient.CreateSchemaRegistryClient(sru)
 	if sruser != "" && srpass != "" {
 		srClient.SetCredentials(sruser, srpass)
@@ -499,17 +502,15 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 	srClient.CachingEnabled(true)
 	srClient.SetTimeout(time.Minute)
 
-	run := true
-
 	//Compile Expression and build structures to evaluate
-	env, err := cel.NewEnv(
+	env, _ := cel.NewEnv(
 		cel.Variable("key", cel.StringType),
 		cel.Variable("value", cel.AnyType),
 		cel.Variable("timestamp", cel.TimestampType),
 		cel.Variable("offset", cel.IntType),
 		cel.Variable("headers", cel.AnyType),
+		cel.Variable("partition", cel.IntType),
 	)
-
 	ast, iss := env.Compile(expr)
 	if iss.Err() != nil {
 		fmt.Println(iss.Err())
@@ -522,6 +523,7 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 	}
 
 	messages := make([]MessageInfo, 0)
+	run := true
 	for run == true {
 		ev := consumer.Poll(10000)
 		switch e := ev.(type) {
@@ -529,21 +531,17 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 			var msgValue any
 			msgKey := string(e.Key[:])
 			msgHeaders := e.Headers
-			outputHeaders := make([]Header, 0)
-			//Create Header Json
+			outputHeaders := make(map[string]string, 0)
 			for _, v := range msgHeaders {
-				outputHeaders = append(outputHeaders, Header{v.Key, string(v.Value[:])})
+				outputHeaders[v.Key] = string(v.Value[:])
 			}
 			switch input {
 			case "json":
 				_ = json.Unmarshal(e.Value, &msgValue)
 			case "proto":
-				var protoMessage proto.Message
-				if err := proto.Unmarshal(e.Value[5:], protoMessage); err != nil {
-					fmt.Println("Failed to parse event", err)
-					os.Exit(1)
-				}
-				msgValue, _ = ProtobufToJSON(protoMessage)
+				fmt.Println("Cannot support protobuf at this time")
+				os.Exit(1)
+
 			case "avro":
 				schemaId := binary.BigEndian.Uint32(e.Value[1:5])
 				schema, err := srClient.GetSchema(int(schemaId))
@@ -561,6 +559,7 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 				"value":     msgValue,
 				"timestamp": e.Timestamp,
 				"offset":    e.TopicPartition.Offset,
+				"partition": e.TopicPartition.Partition,
 				"headers":   outputHeaders,
 			})
 			if err != nil {
@@ -593,16 +592,6 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 		fmt.Println(err)
 	}
 	return messages
-}
-func ProtobufToJSON(message proto.Message) (string, error) {
-	marshaler := jsonpb.Marshaler{
-		EnumsAsInts:  false,
-		EmitDefaults: true,
-		Indent:       "  ",
-		OrigName:     true,
-	}
-
-	return marshaler.MarshalToString(message)
 }
 
 /*

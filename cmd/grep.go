@@ -71,7 +71,7 @@ var grepCmd = &cobra.Command{
 
 		config, err := KafkaUtils.GetConsumerConfig(bootstrap, propertyXargs)
 
-		var messages = KafkaUtils.FindMessage(*config, topic, expression, inputFormat, flags)
+		var messages = KafkaUtils.GrepMessage(*config, topic, expression, inputFormat, flags)
 
 		//Output the results
 		switch output {
