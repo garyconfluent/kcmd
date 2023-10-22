@@ -129,6 +129,60 @@ Flags:
 ./kcmd grep -b localhost:9092 -e 4164
 
 ```
+### `copy`
+```bash
+Copy messages from one topic to another.
+        Optionally filter messages before copying.
+
+Usage:
+  kcmd copy [flags]
+
+Flags:
+      --c-config string       Path To Consumer Config
+  -c, --continuous            Run Command Continously
+      --filter string         Filter applied to input topic to filter messages
+  -h, --help                  help for copy
+  -I, --iarg stringArray      Pass optional Arguments. iargs are passed as -I key=value -X key=value
+      --input-bs string       Input Bootstrap Url
+      --input-format string   Input format(json,avro,string) - Used to deserialize messages for expression
+      --input-topic string    Input Topic Name
+  -O, --oarg stringArray      Pass optional Arguments. oargs are passed as -O key=value -X key=value
+      --output-bs string      Output Bootstrap Url
+      --output-topic string   Output Topic Name
+      --p-config string       Path To Producer Config
+      --sr-pass string        Schema Registry Password
+      --sr-url string         Schema Registry Url
+      --sr-user string        Schema Registry User
+```
+#### Examples
+```bash
+# Simple Copy Command
+./kcmd copy --input-bs localhost:19092 --output-bs localhost:19092 --input-topic twitter-connect-configs --output-topic twitter-connect-offsets
+
+#Continous Copy messages -c|--continuous true will enable consumer keep consuming until closed
+./kcmd copy --input-bs localhost:19092 --output-bs localhost:19092 --input-topic twitter-connect-configs --output-topic twitter-connect-offsets -c true
+
+#Complex Example for Confluent Cloud. 
+#input-format and filter are set to filter messages before sending to output
+./kcmd copy --input-bs  <input-bootstrap-server> \
+            --output-bs <output-bootstrap-server> \
+            --input-topic datagen-topic \
+            --output-topic orders-filtered \
+            -I sasl.username=<input-api-key> \
+            -I sasl.password=<input-secret-key> \
+            -I sasl.mechanism=PLAIN \
+            -I security.protocol=SASL_SSL \
+            -O sasl.username=<output-api-key> \
+            -O sasl.password=<output-api-secret> \
+            -O sasl.mechanism=PLAIN \
+            -O security.protocol=SASL_SSL \
+            --sr-url <schema-registry-url> \
+            --sr-user <schema-registry-user> \
+            --sr-pass <schema-registry-password> \
+            --input-format avro \
+            --filter "value.quantity > 4000 && value.side == 'BUY'" 
+
+```
 
 ### `stats`
 ```bash
