@@ -4,21 +4,23 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/montanaflynn/stats"
 	"github.com/riferrei/srclient"
 	"github.com/xyproto/randomstring"
+	"log"
 	"os"
+	"os/signal"
 	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
-
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 )
 
 var TopicCountFields = []interface{}{"Topic", "Count"}
@@ -405,71 +407,80 @@ func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string,
 	}
 	srClient.CachingEnabled(true)
 	srClient.SetTimeout(time.Minute)
+	//Create Signal Channel
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 
 	run := true
 	messages := make([]MessageInfo, 0)
 	for run == true {
-		ev := consumer.Poll(10000)
-		switch e := ev.(type) {
-		case *kafka.Message:
-			msgValue := string(e.Value)
-			msgKey := string(e.Key[:])
-			msgHeaders := e.Headers
-
-			switch input {
-			case "json":
-				err := json.Unmarshal(e.Value, &msgValue)
-				if err != nil {
-					fmt.Printf("Error unmarshalling json %s\n", err)
-				}
-			case "proto":
-				fmt.Println("Cannot support protobuf at this time")
-				os.Exit(1)
-			case "avro":
-				schemaId := binary.BigEndian.Uint32(e.Value[1:5])
-				schema, err := srClient.GetSchema(int(schemaId))
-				if err != nil {
-					panic(fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err))
-				}
-				native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
-				value, _ := schema.Codec().TextualFromNative(nil, native)
-				msgValue = string(value)
-			default:
-				msgValue = string(e.Value[:])
-			}
-
-			isMatchValue := regexFind.MatchString(msgValue)
-			isMatchKey := regexFind.MatchString(msgKey)
-			isMatchHeaders := false
-			for _, v := range msgHeaders {
-				if regexFind.MatchString(v.Key) || regexFind.MatchString(string(v.Value[:])) {
-					isMatchHeaders = true
-					break
-				}
-			}
-
-			if isMatchValue || isMatchKey || isMatchHeaders {
-				outputHeaders := make(map[string]string)
-				for _, v := range msgHeaders {
-					outputHeaders[v.Key] = string(v.Value[:])
-				}
-				msgInfo := MessageInfo{
-					string(msgKey),
-					string(msgValue),
-					e.Timestamp,
-					e.TopicPartition.Partition,
-					int32(e.TopicPartition.Offset),
-					outputHeaders}
-				messages = append(messages, msgInfo)
-			}
-		case kafka.Error:
-			fmt.Printf("Error in Consumer Find %s\n", ev)
+		select {
+		case sig := <-sigchan:
+			fmt.Printf("Grep Cancelled %v: terminating\n", sig)
 			run = false
-			partCount = 0
-		case kafka.PartitionEOF:
-			partCount--
-			if partCount == 0 {
+		default:
+			ev := consumer.Poll(10000)
+			switch e := ev.(type) {
+			case *kafka.Message:
+				msgValue := string(e.Value)
+				msgKey := string(e.Key[:])
+				msgHeaders := e.Headers
+
+				switch input {
+				case "json":
+					err := json.Unmarshal(e.Value, &msgValue)
+					if err != nil {
+						fmt.Printf("Error unmarshalling json %s\n", err)
+					}
+				case "proto":
+					fmt.Println("Cannot support protobuf at this time")
+					os.Exit(1)
+				case "avro":
+					schemaId := binary.BigEndian.Uint32(e.Value[1:5])
+					schema, err := srClient.GetSchema(int(schemaId))
+					if err != nil {
+						panic(fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err))
+					}
+					native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
+					value, _ := schema.Codec().TextualFromNative(nil, native)
+					msgValue = string(value)
+				default:
+					msgValue = string(e.Value[:])
+				}
+
+				isMatchValue := regexFind.MatchString(msgValue)
+				isMatchKey := regexFind.MatchString(msgKey)
+				isMatchHeaders := false
+				for _, v := range msgHeaders {
+					if regexFind.MatchString(v.Key) || regexFind.MatchString(string(v.Value[:])) {
+						isMatchHeaders = true
+						break
+					}
+				}
+
+				if isMatchValue || isMatchKey || isMatchHeaders {
+					outputHeaders := make(map[string]string)
+					for _, v := range msgHeaders {
+						outputHeaders[v.Key] = string(v.Value[:])
+					}
+					msgInfo := MessageInfo{
+						string(msgKey),
+						string(msgValue),
+						e.Timestamp,
+						e.TopicPartition.Partition,
+						int32(e.TopicPartition.Offset),
+						outputHeaders}
+					messages = append(messages, msgInfo)
+				}
+			case kafka.Error:
+				fmt.Printf("Error in Consumer Find %s\n", ev)
 				run = false
+				partCount = 0
+			case kafka.PartitionEOF:
+				partCount--
+				if partCount == 0 {
+					run = false
+				}
 			}
 		}
 	}
@@ -572,8 +583,14 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 			}
 		}
 	}()
+	//Create Signal Channel
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
+	log.Print("Ready to start Processing")
+	ticker := time.NewTicker(time.Second * 30)
 	processed := 0
 	sent := 1
+	copiedSince := 1
 	run := true
 	for run == true {
 		deliveryChan := make(chan kafka.Event)
@@ -602,86 +619,92 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 				close(deliveryChan)
 			}
 		}()
-
-		ev := consumer.Poll(10000)
-		switch e := ev.(type) {
-		case *kafka.Message:
-			var msgValue any
-			msgKey := string(e.Key[:])
-			msgHeaders := e.Headers
-			outputHeaders := make(map[string]string, 0)
-			for _, v := range msgHeaders {
-				outputHeaders[v.Key] = string(v.Value[:])
-			}
-			switch input {
-			case "json":
-				_ = json.Unmarshal(e.Value, &msgValue)
-			case "proto":
-				fmt.Println("Cannot support protobuf at this time")
-				os.Exit(1)
-			case "avro":
-				schemaId := binary.BigEndian.Uint32(e.Value[1:5])
-				schema, err := srClient.GetSchema(int(schemaId))
-				if err != nil {
-					fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err)
-				}
-				native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
-				value, _ := schema.Codec().TextualFromNative(nil, native)
-				_ = json.Unmarshal(value, &msgValue)
-			default:
-				msgValue = string(e.Value[:])
-			}
-			out, _, err := prg.Eval(map[string]any{
-				"key":       msgKey,
-				"value":     msgValue,
-				"timestamp": e.Timestamp,
-				"offset":    e.TopicPartition.Offset,
-				"partition": e.TopicPartition.Partition,
-				"headers":   outputHeaders,
-			})
-			if err != nil {
-				fmt.Printf("Evaluation Error: %s\n", err)
-			}
-			isMatch, _ := strconv.ParseBool(fmt.Sprint(out))
-			if isMatch {
-				err = producer.Produce(&kafka.Message{
-					TopicPartition: kafka.TopicPartition{Topic: &outputTopic, Partition: kafka.PartitionAny},
-					Key:            e.Key,
-					Value:          e.Value,
-					Headers:        e.Headers}, deliveryChan)
-				sent++
-				if err != nil {
-					close(deliveryChan)
-					if err.(kafka.Error).Code() == kafka.ErrQueueFull {
-						// Producer queue is full, wait 1s for messages
-						// to be delivered then try again.
-						fmt.Println("Producer Queue is full")
-						time.Sleep(time.Second * 5)
-						continue
-					}
-					fmt.Printf("Error Producing to topic:%s err:%s\n", outputTopic, err)
-				}
-			}
-		case kafka.Error:
-			fmt.Printf("Error in Consumer Find %s\n", ev)
+		select {
+		case <-ticker.C:
+			log.Printf("Status: Processing copied since:%d\n", copiedSince)
+			copiedSince = 0
+		case sig := <-sigchan:
+			fmt.Printf("Copy Cancelled: %v: terminating\n", sig)
 			run = false
-		case kafka.PartitionEOF:
-			if !continuous {
-				partCount--
-				if partCount == 0 {
-					run = false
+		default:
+			ev := consumer.Poll(10000)
+			switch e := ev.(type) {
+			case *kafka.Message:
+				var msgValue any
+				msgKey := string(e.Key[:])
+				msgHeaders := e.Headers
+				outputHeaders := make(map[string]string, 0)
+				for _, v := range msgHeaders {
+					outputHeaders[v.Key] = string(v.Value[:])
+				}
+				switch input {
+				case "json":
+					_ = json.Unmarshal(e.Value, &msgValue)
+				case "proto":
+					fmt.Println("Cannot support protobuf at this time")
+					os.Exit(1)
+				case "avro":
+					schemaId := binary.BigEndian.Uint32(e.Value[1:5])
+					schema, err := srClient.GetSchema(int(schemaId))
+					if err != nil {
+						fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err)
+					}
+					native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
+					value, _ := schema.Codec().TextualFromNative(nil, native)
+					_ = json.Unmarshal(value, &msgValue)
+				default:
+					msgValue = string(e.Value[:])
+				}
+				out, _, err := prg.Eval(map[string]any{
+					"key":       msgKey,
+					"value":     msgValue,
+					"timestamp": e.Timestamp,
+					"offset":    e.TopicPartition.Offset,
+					"partition": e.TopicPartition.Partition,
+					"headers":   outputHeaders,
+				})
+				if err != nil {
+					fmt.Printf("Evaluation Error: %s\n", err)
+				}
+				isMatch, _ := strconv.ParseBool(fmt.Sprint(out))
+				if isMatch {
+					err = producer.Produce(&kafka.Message{
+						TopicPartition: kafka.TopicPartition{Topic: &outputTopic, Partition: kafka.PartitionAny},
+						Key:            e.Key,
+						Value:          e.Value,
+						Headers:        e.Headers}, deliveryChan)
+					sent++
+					copiedSince++
+					if err != nil {
+						close(deliveryChan)
+						if err.(kafka.Error).Code() == kafka.ErrQueueFull {
+							// Producer queue is full, wait 1s for messages
+							// to be delivered then try again.
+							fmt.Println("Producer Queue is full")
+							time.Sleep(time.Second * 5)
+							continue
+						}
+						log.Printf("Error Producing to topic:%s err:%s\n", outputTopic, err)
+					}
+				}
+			case kafka.Error:
+				fmt.Printf("Error in Consumer Find %s\n", ev)
+				run = false
+			case kafka.PartitionEOF:
+				if !continuous {
+					partCount--
+					if partCount == 0 {
+						run = false
+					}
 				}
 			}
+			processed++
+			if processed%1000 == 0 {
+				log.Printf("Processed messages:%d, sent:%d\n", processed, sent)
+			}
 		}
-
-		processed++
-		if processed%1000 == 0 {
-			fmt.Printf("Sent messages %d\n", sent)
-		}
-		/*if ctr%1000 == 0 {
-			fmt.Printf("Copying Message %d\n", ctr)
-		}*/
 	}
+	log.Printf("Shutting Down Processed: %d, Copied: %d\n", processed, sent)
 	cerr := consumer.Close()
 	if cerr != nil {
 		fmt.Println(cerr)
@@ -752,69 +775,77 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 		fmt.Println(iss.Err())
 		os.Exit(1)
 	}
+	sigchan := make(chan os.Signal, 1)
+	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 
 	messages := make([]MessageInfo, 0)
 	run := true
 	for run == true {
-		ev := consumer.Poll(10000)
-		switch e := ev.(type) {
-		case *kafka.Message:
-			var msgValue any
-			msgKey := string(e.Key[:])
-			msgHeaders := e.Headers
-			outputHeaders := make(map[string]string, 0)
-			for _, v := range msgHeaders {
-				outputHeaders[v.Key] = string(v.Value[:])
-			}
-			switch input {
-			case "json":
-				_ = json.Unmarshal(e.Value, &msgValue)
-			case "proto":
-				fmt.Println("Cannot support protobuf at this time")
-				os.Exit(1)
-
-			case "avro":
-				schemaId := binary.BigEndian.Uint32(e.Value[1:5])
-				schema, err := srClient.GetSchema(int(schemaId))
-				if err != nil {
-					panic(fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err))
-				}
-				native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
-				value, _ := schema.Codec().TextualFromNative(nil, native)
-				_ = json.Unmarshal(value, &msgValue)
-			default:
-				msgValue = string(e.Value[:])
-			}
-			out, _, err := prg.Eval(map[string]any{
-				"key":       msgKey,
-				"value":     msgValue,
-				"timestamp": e.Timestamp,
-				"offset":    e.TopicPartition.Offset,
-				"partition": e.TopicPartition.Partition,
-				"headers":   outputHeaders,
-			})
-			if err != nil {
-				fmt.Printf("Evaluation Error: %s\n", err)
-			}
-			isMatch, _ := strconv.ParseBool(fmt.Sprint(out))
-			if isMatch {
-				msgInfo := MessageInfo{
-					string(msgKey),
-					msgValue,
-					e.Timestamp,
-					e.TopicPartition.Partition,
-					int32(e.TopicPartition.Offset),
-					outputHeaders}
-				messages = append(messages, msgInfo)
-			}
-		case kafka.Error:
-			fmt.Printf("Error in Consumer Find %s\n", ev)
+		select {
+		case sig := <-sigchan:
+			fmt.Printf("Find Cancelled %v: terminating\n", sig)
 			run = false
-			partCount = 0
-		case kafka.PartitionEOF:
-			partCount--
-			if partCount == 0 {
+		default:
+			ev := consumer.Poll(10000)
+			switch e := ev.(type) {
+			case *kafka.Message:
+				var msgValue any
+				msgKey := string(e.Key[:])
+				msgHeaders := e.Headers
+				outputHeaders := make(map[string]string, 0)
+				for _, v := range msgHeaders {
+					outputHeaders[v.Key] = string(v.Value[:])
+				}
+				switch input {
+				case "json":
+					_ = json.Unmarshal(e.Value, &msgValue)
+				case "proto":
+					fmt.Println("Cannot support protobuf at this time")
+					os.Exit(1)
+
+				case "avro":
+					schemaId := binary.BigEndian.Uint32(e.Value[1:5])
+					schema, err := srClient.GetSchema(int(schemaId))
+					if err != nil {
+						panic(fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err))
+					}
+					native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
+					value, _ := schema.Codec().TextualFromNative(nil, native)
+					_ = json.Unmarshal(value, &msgValue)
+				default:
+					msgValue = string(e.Value[:])
+				}
+				out, _, err := prg.Eval(map[string]any{
+					"key":       msgKey,
+					"value":     msgValue,
+					"timestamp": e.Timestamp,
+					"offset":    e.TopicPartition.Offset,
+					"partition": e.TopicPartition.Partition,
+					"headers":   outputHeaders,
+				})
+				if err != nil {
+					fmt.Printf("Evaluation Error: %s\n", err)
+				}
+				isMatch, _ := strconv.ParseBool(fmt.Sprint(out))
+				if isMatch {
+					msgInfo := MessageInfo{
+						string(msgKey),
+						msgValue,
+						e.Timestamp,
+						e.TopicPartition.Partition,
+						int32(e.TopicPartition.Offset),
+						outputHeaders}
+					messages = append(messages, msgInfo)
+				}
+			case kafka.Error:
+				fmt.Printf("Error in Consumer Find %s\n", ev)
 				run = false
+				partCount = 0
+			case kafka.PartitionEOF:
+				partCount--
+				if partCount == 0 {
+					run = false
+				}
 			}
 		}
 	}
