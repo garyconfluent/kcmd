@@ -181,7 +181,24 @@ Flags:
             --sr-pass <schema-registry-password> \
             --input-format avro \
             --filter "value.quantity > 4000 && value.side == 'BUY'" 
-
+            
+#Copy Complex with continuous and restart
+#The group.id is set random string so by passing input arguments overwrites default settings
+#Passing input arguments I group.id=FilterOrderedLargerThan4000AndSell -I auto.offset.reset=earliest
+#The filter relies on source schema registry so pass in credentials to filter messages using value parameters
+#TH
+./kcmd copy --input-bs  <input-bootstrap-server> \
+            --output-bs <output-bootstrap-server> \
+            --input-topic datagen-orders \
+            --output-topic large-orders 
+            -I group.id=FilterOrderedLargerThan4000AndSell \
+            -I auto.offset.reset=earliest \
+            --sr-url <schema-registry-url> \
+            --sr-user <schema-registry-user> \
+            --sr-pass <schema-registry-password> \
+            --input-format avro \
+            --filter "value.quantity > 4000 && value.side == 'SELL'"
+            -c true
 ```
 
 ### `stats`
