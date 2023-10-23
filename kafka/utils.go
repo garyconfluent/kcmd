@@ -1,6 +1,7 @@
 package KafkaUtils
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -76,7 +77,7 @@ func GetAdminConfig(bootstrap string, propertyArgs map[string]string) (*kafka.Co
 	if err := config.SetKey("bootstrap.servers", bootstrap); err != nil {
 		return nil, err
 	}
-	//Iterate propartyArges and set value in ConfigMap
+	//Iterate propertyArgs and set value in ConfigMap
 	if len(propertyArgs) > 0 {
 		for key, value := range propertyArgs {
 			if err := config.SetKey(key, value); err != nil {
@@ -95,10 +96,10 @@ func GetConsumerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 	if err := config.SetKey("bootstrap.servers", bootstrap); err != nil {
 		return nil, err
 	}
-	if err := config.SetKey("client.id", "kafkautils"); err != nil {
+	if err := config.SetKey("client.id", "kafkacommand"); err != nil {
 		return nil, err
 	}
-	if err := config.SetKey("group.id", "kafkautils-"+randomstring.EnglishFrequencyString(4)); err != nil {
+	if err := config.SetKey("group.id", "kafkacommand-"+randomstring.EnglishFrequencyString(4)); err != nil {
 		return nil, err
 	}
 	if err := config.SetKey("auto.offset.reset", "beginning"); err != nil {
@@ -127,7 +128,7 @@ func GetProducerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 	if err := config.SetKey("bootstrap.servers", bootstrap); err != nil {
 		return nil, err
 	}
-	if err := config.SetKey("client.id", "kafkautils"); err != nil {
+	if err := config.SetKey("client.id", "kafkacommand"); err != nil {
 		return nil, err
 	}
 
@@ -137,7 +138,6 @@ func GetProducerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 			return nil, err
 		}
 	}
-
 	return config, nil
 }
 
@@ -354,7 +354,7 @@ func FastCountMessages(config kafka.ConfigMap, topic string, partitions int) Top
 		if err != nil {
 			return TopicCount{topic, -1}
 		}
-		count += high - low //fmt.Printf("Topic %s,Partition: %d Offsets: %d %d\n", topic, part.ID, low, high)
+		count += high - low
 	}
 	time.Sleep(2 * time.Second) //Thread Panic here let sleep before connection is closed
 	ac.Close()
@@ -854,6 +854,73 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 		fmt.Println(err)
 	}
 	return messages
+}
+
+var ConsumerGroupFields = []interface{}{"GroupId", "GroupState", "IsSimpleConsumer"}
+
+type ConsumerGroup struct {
+	GroupId          string `json:"groupId"`
+	GroupState       string `json:"groupState"`
+	IsSimpleConsumer bool   `json:"isSimpleConsumer"`
+}
+
+func ListConsumerGroups(config kafka.ConfigMap, filter string) []ConsumerGroup {
+	ac, err := kafka.NewAdminClient(&config)
+	if err != nil {
+		fmt.Printf("Failed to create Admin client: %s\n", err)
+		os.Exit(1)
+	}
+	defer ac.Close()
+
+	// Call ListConsumerGroups.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+	listGroupRes, err := ac.ListConsumerGroups(
+		ctx, kafka.SetAdminMatchConsumerGroupStates(nil))
+	if err != nil {
+		fmt.Printf("Failed to list groups with client-level error %s\n", err)
+		os.Exit(1)
+	}
+	filterExpr, err := regexp.Compile(filter)
+	if err != nil {
+		fmt.Println("Failed to compile regex")
+		os.Exit(1)
+	}
+	// Print results
+	groupList := make([]ConsumerGroup, 0)
+	groups := listGroupRes.Valid
+	for _, group := range groups {
+		var groupId = group.GroupID
+		if filterExpr.MatchString(groupId) {
+			groupList = append(groupList, ConsumerGroup{group.GroupID, group.State.String(), group.IsSimpleConsumerGroup})
+		}
+	}
+	return groupList
+}
+
+func DeleteConsumerGroup(config kafka.ConfigMap, groups []string) kafka.DeleteConsumerGroupsResult {
+	// Create new AdminClient.
+	ac, err := kafka.NewAdminClient(&config)
+	if err != nil {
+		fmt.Printf("Failed to create Admin client: %s\n", err)
+		os.Exit(1)
+	}
+	defer ac.Close()
+
+	if err != nil {
+		fmt.Printf("Failed to parse timeout: %s\n", err)
+		os.Exit(1)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	res, err := ac.DeleteConsumerGroups(ctx, groups, kafka.SetAdminRequestTimeout(10*time.Second))
+	if err != nil {
+		fmt.Printf("Failed to delete groups: %s\n", err)
+		os.Exit(1)
+	}
+	return res
 }
 
 /*

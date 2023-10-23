@@ -1,6 +1,8 @@
 # KCMD Readme
  
-Command Line Utilities for Kafka
+Command Line Utilities for Kafka written in Go,
+Provides common tools to analyze, display, find and copy messages in Kafka.
+
 
 ## Commands
 
@@ -42,7 +44,7 @@ Flags:
 #Find Topics matching a value input of string
 ./kcmd find -b <bootstrap-url> \
               -t datagen-topic \
-              -e "Offset > 10000 && Offset < 10010" \ 
+              -e "offset > 10000 && offset < 10010" \ 
               -o json
 
 #Find value of message using avro format and schema registry
@@ -268,4 +270,57 @@ Flags:
                -X sasl.mechanism=PLAIN \
                -X security.protocol=SASL_SSL
                
+```
+## Group Commands
+Provides Consumer Group Commands
+### `list`
+List Consumer Group Commands
+```bash
+List all Consumer Groups
+
+Usage:
+  kcmd group list [flags]
+
+Flags:
+  -X, --args stringArray   Configuration Argument key=value
+  -b, --bootstrap string   Bootstrap Server Url (Required)
+  -f, --filter string      Filter groups by value regex
+  -h, --help               help for list
+  -o, --output string      Output Table,Json,Print[default]
+```
+#### Examples
+```bash
+#List all Consumer Groups and output to json
+./kcmd group list -b localhost:9092 -o json
+
+#list consumer groups matching regex zip
+./kcmd group list -b localhost:9092 -f "zip"
+
+#Confluent Cloud Example
+./kcmd group list \
+  -b <bootstrap-server-url> \
+  -X sasl.username=<api-key> \
+  -X sasl.password=<secret-key \
+  -X sasl.mechanism=PLAIN \
+  -X security.protocol=SASL_SSL 
+```
+
+### `delete`
+Delete Consumer Group(s)
+```bash
+Delete Consumer Group(s)
+
+Usage:
+  kcmd group delete [flags]
+
+Flags:
+  -X, --args stringArray    Configuration Argument key=value
+  -b, --bootstrap string    Bootstrap Server Url
+  -g, --group stringArray   Group Flag for each group to delete
+  -h, --help                help for delete
+```
+#### Examples
+```bash
+#delete groups
+./kcmd group delete -b localhost:9092 -g Group1 -g Group2
 ```
