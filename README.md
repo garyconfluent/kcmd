@@ -273,7 +273,7 @@ Flags:
 ```
 ## Group Commands
 Provides Consumer Group Commands
-### `list`
+### `group list`
 List Consumer Group Commands
 ```bash
 List all Consumer Groups
@@ -285,7 +285,7 @@ Flags:
   -X, --args stringArray   Configuration Argument key=value
   -b, --bootstrap string   Bootstrap Server Url (Required)
   -f, --filter string      Filter groups by value regex
-  -h, --help               help for list
+  -h, --help               help for list  
   -o, --output string      Output Table,Json,Print[default]
 ```
 #### Examples
@@ -305,7 +305,7 @@ Flags:
   -X security.protocol=SASL_SSL 
 ```
 
-### `delete`
+### `group delete`
 Delete Consumer Group(s)
 ```bash
 Delete Consumer Group(s)

@@ -69,9 +69,7 @@ type Header struct {
 	Value string `json:"value"`
 }
 
-/*
- * Returns the AdminConfiguration required for ListTopics
- */
+// GetAdminConfig Returns the AdminConfiguration required for ListTopics
 func GetAdminConfig(bootstrap string, propertyArgs map[string]string) (*kafka.ConfigMap, error) {
 	config := &kafka.ConfigMap{}
 	if err := config.SetKey("bootstrap.servers", bootstrap); err != nil {
@@ -88,9 +86,7 @@ func GetAdminConfig(bootstrap string, propertyArgs map[string]string) (*kafka.Co
 	return config, nil
 }
 
-/*
- * Return the COnsumer Config and then optionally add custom parameters
- */
+// Return the Consumer Config and then optionally add custom parameters
 func GetConsumerConfig(bootstrap string, propertyArgs map[string]string) (*kafka.ConfigMap, error) {
 	config := &kafka.ConfigMap{}
 	if err := config.SetKey("bootstrap.servers", bootstrap); err != nil {
@@ -120,9 +116,7 @@ func GetConsumerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 	return config, nil
 }
 
-/*
- * Return the COnsumer Config and then optionally add custom parameters
- */
+// Return the COnsumer Config and then optionally add custom parameters
 func GetProducerConfig(bootstrap string, propertyArgs map[string]string) (*kafka.ConfigMap, error) {
 	config := &kafka.ConfigMap{}
 	if err := config.SetKey("bootstrap.servers", bootstrap); err != nil {
@@ -141,9 +135,7 @@ func GetProducerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 	return config, nil
 }
 
-/*
-* List of Topics and Partitions
- */
+// List of Topics and Partitions
 func ListTopics(config kafka.ConfigMap) []TopicPartition {
 	ac, err := kafka.NewAdminClient(&config)
 	if err != nil {
@@ -163,9 +155,7 @@ func ListTopics(config kafka.ConfigMap) []TopicPartition {
 	return topicNames
 }
 
-/*
- *  List of topics and Count number of messages.
- */
+// List of topics and Count number of messages.
 func ListTopicsAndCount(config kafka.ConfigMap, topics []TopicPartition, estimate bool) []TopicCount {
 	topicCounts := []TopicCount{}
 	var wg sync.WaitGroup
@@ -193,9 +183,7 @@ func ListTopicsAndCount(config kafka.ConfigMap, topics []TopicPartition, estimat
 	return topicCounts
 }
 
-/*
- *  List of topics and Output Statitics
- */
+// List of topics and Output Statitics
 func ListTopicsAndStatistics(config kafka.ConfigMap, topics []TopicPartition) []TopicStatistic {
 	var topicStats []TopicStatistic
 	var wg sync.WaitGroup
@@ -218,9 +206,7 @@ func ListTopicsAndStatistics(config kafka.ConfigMap, topics []TopicPartition) []
 	return topicStats
 }
 
-/*
- * Create a Consumer and executes count
- */
+// Create a Consumer and executes count
 func CountMessages(config kafka.ConfigMap, topic string, partitions int) TopicCount {
 	//fmt.Printf("Counting Topic:%s", topic)
 	run := true
@@ -261,9 +247,7 @@ func CountMessages(config kafka.ConfigMap, topic string, partitions int) TopicCo
 	return TopicCount{Topic: topic, Count: ctr}
 }
 
-/*
- * Create a Consumer and executes count
- */
+// Create a Consumer and executes statistics
 func StatMessage(config kafka.ConfigMap, topic string, partitions int) TopicStatistic {
 	//fmt.Printf("Counting Topic:%s", topic)
 	run := true
@@ -326,9 +310,7 @@ func average(xs []float64) float64 {
 	return total / float64(len(xs))
 }
 
-/*
- * Function does a fast count by using offsets and watermarks
- */
+// Function does a fast count by using offsets and watermarks
 func FastCountMessages(config kafka.ConfigMap, topic string, partitions int) TopicCount {
 
 	var consumer, err = kafka.NewConsumer(&config)
@@ -363,9 +345,7 @@ func FastCountMessages(config kafka.ConfigMap, topic string, partitions int) Top
 	return TopicCount{topic, int(count)}
 }
 
-/*
-* Grep messages based on a regex pattern, optionally deserializes output based on schema registry
- */
+// Grep messages based on a regex pattern, optionally deserializes output based on schema registry
 func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string, flags map[string]string) []MessageInfo {
 	//Compile regex
 	regexFind, rerr := regexp.Compile(reg)
@@ -401,12 +381,8 @@ func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string,
 	sru := flags["schema.registry"]
 	sruser := flags["schema.registry.user"]
 	srpass := flags["schema.registry.password"]
-	srClient := srclient.CreateSchemaRegistryClient(sru)
-	if sruser != "" && srpass != "" {
-		srClient.SetCredentials(sruser, srpass)
-	}
-	srClient.CachingEnabled(true)
-	srClient.SetTimeout(time.Minute)
+	srClient := CreateSchemaRegistry(sru, sruser, srpass)
+
 	//Create Signal Channel
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
@@ -436,14 +412,9 @@ func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string,
 					fmt.Println("Cannot support protobuf at this time")
 					os.Exit(1)
 				case "avro":
-					schemaId := binary.BigEndian.Uint32(e.Value[1:5])
-					schema, err := srClient.GetSchema(int(schemaId))
-					if err != nil {
-						panic(fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err))
-					}
-					native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
-					value, _ := schema.Codec().TextualFromNative(nil, native)
+					value := GetAvroMessage(srClient, e)
 					msgValue = string(value)
+
 				default:
 					msgValue = string(e.Value[:])
 				}
@@ -491,9 +462,7 @@ func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string,
 	return messages
 }
 
-/*
- * Copy messages from one broker/topic to another broker/topic
- */
+// CopyMessages Copy messages from one broker/topic to another broker/topic
 func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap, inputTopic string, outputTopic string, continuous bool, flags map[string]string) {
 	var consumer, err = kafka.NewConsumer(&consumerConfig)
 	if err != nil {
@@ -543,32 +512,12 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 	sru := flags["schema.registry"]
 	sruser := flags["schema.registry.user"]
 	srpass := flags["schema.registry.password"]
-	//srclient create Schema Registry
-	srClient := srclient.CreateSchemaRegistryClient(sru)
-	if sruser != "" && srpass != "" {
-		srClient.SetCredentials(sruser, srpass)
-	}
-	srClient.CachingEnabled(true)
-	srClient.SetTimeout(time.Minute)
+	srClient := CreateSchemaRegistry(sru, sruser, srpass)
 
 	//Compile CEL Expression and build structures to evaluate
-	env, _ := cel.NewEnv(
-		cel.Variable("key", cel.StringType),
-		cel.Variable("value", cel.AnyType),
-		cel.Variable("timestamp", cel.TimestampType),
-		cel.Variable("offset", cel.IntType),
-		cel.Variable("headers", cel.AnyType),
-		cel.Variable("partition", cel.IntType),
-	)
-
-	ast, iss := env.Compile(expr)
-	if iss.Err() != nil {
-		fmt.Println(iss.Err())
-		os.Exit(1)
-	}
-	prg, err := env.Program(ast)
+	prg, err := CreateCelProgram(expr)
 	if err != nil {
-		fmt.Println(iss.Err())
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
@@ -644,14 +593,9 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 					fmt.Println("Cannot support protobuf at this time")
 					os.Exit(1)
 				case "avro":
-					schemaId := binary.BigEndian.Uint32(e.Value[1:5])
-					schema, err := srClient.GetSchema(int(schemaId))
-					if err != nil {
-						fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err)
-					}
-					native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
-					value, _ := schema.Codec().TextualFromNative(nil, native)
+					value := GetAvroMessage(srClient, e)
 					_ = json.Unmarshal(value, &msgValue)
+
 				default:
 					msgValue = string(e.Value[:])
 				}
@@ -714,9 +658,7 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 	producer.Close()
 }
 
-/*
- * Finds messages based on a CEL Expresssion, optionally deserializes output based on schema registry
- */
+// FindMessageExpr Finds messages based on a CEL Expression, optionally deserializes output based on schema registry
 func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input string, flags map[string]string) []MessageInfo {
 	//Compile expression
 
@@ -748,33 +690,15 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 	sru := flags["schema.registry"]
 	sruser := flags["schema.registry.user"]
 	srpass := flags["schema.registry.password"]
-	//srclient create Schema Registry
-	srClient := srclient.CreateSchemaRegistryClient(sru)
-	if sruser != "" && srpass != "" {
-		srClient.SetCredentials(sruser, srpass)
-	}
-	srClient.CachingEnabled(true)
-	srClient.SetTimeout(time.Minute)
+	srClient := CreateSchemaRegistry(sru, sruser, srpass)
 
 	//Compile Expression and build structures to evaluate
-	env, _ := cel.NewEnv(
-		cel.Variable("key", cel.StringType),
-		cel.Variable("value", cel.AnyType),
-		cel.Variable("timestamp", cel.TimestampType),
-		cel.Variable("offset", cel.IntType),
-		cel.Variable("headers", cel.AnyType),
-		cel.Variable("partition", cel.IntType),
-	)
-	ast, iss := env.Compile(expr)
-	if iss.Err() != nil {
-		fmt.Println(iss.Err())
-		os.Exit(1)
-	}
-	prg, err := env.Program(ast)
+	prg, err := CreateCelProgram(expr)
 	if err != nil {
-		fmt.Println(iss.Err())
+		fmt.Println(err)
 		os.Exit(1)
 	}
+
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -802,15 +726,8 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 				case "proto":
 					fmt.Println("Cannot support protobuf at this time")
 					os.Exit(1)
-
 				case "avro":
-					schemaId := binary.BigEndian.Uint32(e.Value[1:5])
-					schema, err := srClient.GetSchema(int(schemaId))
-					if err != nil {
-						panic(fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err))
-					}
-					native, _, _ := schema.Codec().NativeFromBinary(e.Value[5:])
-					value, _ := schema.Codec().TextualFromNative(nil, native)
+					value := GetAvroMessage(srClient, e)
 					_ = json.Unmarshal(value, &msgValue)
 				default:
 					msgValue = string(e.Value[:])
@@ -856,6 +773,52 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 	return messages
 }
 
+// CreateSchemaRegistry Creates Schema Registry Client
+func CreateSchemaRegistry(sru string, sruser string, srpass string) *srclient.SchemaRegistryClient {
+	srClient := srclient.CreateSchemaRegistryClient(sru)
+	if sruser != "" && srpass != "" {
+		srClient.SetCredentials(sruser, srpass)
+	}
+	srClient.CachingEnabled(true)
+	srClient.SetTimeout(time.Minute)
+	return srClient
+}
+
+// CreateCelProgram Creates the Cel Program
+func CreateCelProgram(expr string) (cel.Program, error) {
+	env, _ := cel.NewEnv(
+		cel.Variable("key", cel.StringType),
+		cel.Variable("value", cel.AnyType),
+		cel.Variable("timestamp", cel.TimestampType),
+		cel.Variable("offset", cel.IntType),
+		cel.Variable("headers", cel.AnyType),
+		cel.Variable("partition", cel.IntType),
+	)
+
+	ast, iss := env.Compile(expr)
+	if iss.Err() != nil {
+		return nil, iss.Err()
+	}
+	prg, err := env.Program(ast)
+	if err != nil {
+		return nil, err
+	}
+	return prg, nil
+}
+
+// GetAvroMessage Gets Schema and Converts Avro Message
+func GetAvroMessage(srClient *srclient.SchemaRegistryClient, message *kafka.Message) []byte {
+	schemaId := binary.BigEndian.Uint32(message.Value[1:5])
+	schema, err := srClient.GetSchema(int(schemaId))
+	if err != nil {
+		fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err)
+	}
+	native, _, _ := schema.Codec().NativeFromBinary(message.Value[5:])
+	value, _ := schema.Codec().TextualFromNative(nil, native)
+	return value
+}
+
+// ConsumerGroupFields Consumer Group Types and interfaces
 var ConsumerGroupFields = []interface{}{"GroupId", "GroupState", "IsSimpleConsumer"}
 
 type ConsumerGroup struct {
@@ -864,6 +827,7 @@ type ConsumerGroup struct {
 	IsSimpleConsumer bool   `json:"isSimpleConsumer"`
 }
 
+// ListConsumerGroups Returns a list of ConsumerGroups
 func ListConsumerGroups(config kafka.ConfigMap, filter string) []ConsumerGroup {
 	ac, err := kafka.NewAdminClient(&config)
 	if err != nil {
@@ -898,6 +862,7 @@ func ListConsumerGroups(config kafka.ConfigMap, filter string) []ConsumerGroup {
 	return groupList
 }
 
+// DeleteConsumerGroup Deletes a Consumer Group
 func DeleteConsumerGroup(config kafka.ConfigMap, groups []string) kafka.DeleteConsumerGroupsResult {
 	// Create new AdminClient.
 	ac, err := kafka.NewAdminClient(&config)
@@ -923,9 +888,7 @@ func DeleteConsumerGroup(config kafka.ConfigMap, groups []string) kafka.DeleteCo
 	return res
 }
 
-/*
-* Prints a struct to a table
- */
+// PrintTable Prints a struct to a table
 func PrintTable(fields []interface{}, objects interface{}, includeOrder bool) {
 	if includeOrder {
 		fields = append([]interface{}{""}, fields...)
@@ -953,9 +916,7 @@ func PrintTable(fields []interface{}, objects interface{}, includeOrder bool) {
 	t.Render()
 }
 
-/*
-* Converts an interface to String array of interfaces
- */
+// ConvertToInterfaceArray Converts an interface to String array of interfaces
 func ConvertToInterfaceArray(object interface{}) []interface{} {
 	o := reflect.ValueOf(object)
 	slice := make([]interface{}, o.Len())
