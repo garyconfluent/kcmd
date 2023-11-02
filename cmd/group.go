@@ -19,8 +19,6 @@ var groupCmd = &cobra.Command{
 		}
 	},
 }
-var groupArgs []string
-var groupFilter string
 
 func init() {
 	rootCmd.AddCommand(groupCmd)

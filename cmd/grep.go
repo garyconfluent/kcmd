@@ -10,6 +10,7 @@ import (
 	KafkaUtils "kcmd/kafka"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -68,10 +69,18 @@ var grepCmd = &cobra.Command{
 		if schemaRegistryPassword != "" {
 			flags["schema.registry.password"] = schemaRegistryPassword
 		}
+		offsetTime := time.Time{}
+		if offsetTimestamp != "" {
+			offsetTime, err = time.Parse(time.RFC3339, offsetTimestamp)
+			if err != nil {
+				fmt.Printf("Error Formatting Time%s\n", err)
+				os.Exit(1)
+			}
+		}
 
 		config, err := KafkaUtils.GetConsumerConfig(bootstrap, propertyXargs)
 
-		var messages = KafkaUtils.GrepMessage(*config, topic, expression, inputFormat, flags)
+		var messages = KafkaUtils.GrepMessage(*config, topic, expression, inputFormat, offsetTime, flags)
 
 		//Output the results
 		switch output {
@@ -101,5 +110,6 @@ func init() {
 	grepCmd.Flags().StringVarP(&schemaRegistryUrl, "sr-url", "s", "", "Optional: Url of Schema Registry")
 	grepCmd.Flags().StringVarP(&schemaRegistryUsername, "sr-user", "u", "", "Optional: Schema Registry Username")
 	grepCmd.Flags().StringVarP(&schemaRegistryPassword, "sr-pass", "p", "", "Optional: Schema Registry Password")
+	grepCmd.Flags().StringVar(&offsetTimestamp, "offset-timestamp", "", "Offset Timestamp to start in RFC3339 format YYYY-MM-DDTHH:mm:SSZ")
 	grepCmd.Flags().StringArrayVarP(&xargs, "xarg", "X", make([]string, 0), "Pass optional Configuration Arguments. xargs are passed as -X key=value -X key=value")
 }

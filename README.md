@@ -31,6 +31,7 @@ Flags:
   -e, --expression string   Regular Expression for match
   -h, --help                help for find
   -i, --input string        Input Format (string,json,avro)
+      --offset-timestamp string   Offset Timestamp in RFC3339 format 2023-10-10T00:00:00Z  
   -o, --output string       Type of output (json,table,key-value)
   -k, --secretkey string    SecretKey (sasl.password)
   -p, --sr-pass string      Schema Registry Password
@@ -118,6 +119,7 @@ Flags:
 -e, --expression string   Required: CEL expression for match
 -h, --help                help for grep
 -i, --input string        Input Format (string[default],json,avro,proto[Not Implemented])
+    --offset-timestamp string   Offset Timestamp in RFC3339 format 2023-10-10T00:00:00Z
 -o, --output string       Type of output (json,table, value[default])
 -k, --secretkey string    Optional: SecretKey (sasl.password)
 -p, --sr-pass string      Optional: Schema Registry Password
@@ -147,7 +149,8 @@ Flags:
   -I, --iarg stringArray      Pass optional Arguments. iargs are passed as -I key=value -X key=value
       --input-bs string       Input Bootstrap Url
       --input-format string   Input format(json,avro,string) - Used to deserialize messages for expression
-      --input-topic string    Input Topic Name
+      --input-topic string    Input Topic 
+      --offset-timestamp string   Offset Timestamp in RFC3339 format 2023-10-10T00:00:00Z      
   -O, --oarg stringArray      Pass optional Arguments. oargs are passed as -O key=value -X key=value
       --output-bs string      Output Bootstrap Url
       --output-topic string   Output Topic Name

@@ -39,7 +39,6 @@ var groupDeleteCmd = &cobra.Command{
 		KafkaUtils.DeleteConsumerGroup(*config, groups)
 	},
 }
-var groups []string
 
 func init() {
 	groupCmd.AddCommand(groupDeleteCmd)

@@ -9,6 +9,7 @@ import (
 	KafkaUtils "kcmd/kafka"
 	"os"
 	"strings"
+	"time"
 )
 
 // copyCmd represents the copy command
@@ -65,26 +66,20 @@ var copyCmd = &cobra.Command{
 		if copyFormat != "" {
 			flags["copyFormat"] = copyFormat
 		}
-		KafkaUtils.CopyMessages(*consumerConfigMap, *producerConfigMap, inputTopic, outputTopic, continuous, flags)
+		if offsetTimestamp != "" {
+			var offsetTime, err = time.Parse(time.RFC3339, offsetTimestamp)
+			if err != nil {
+				fmt.Printf("Error Formatting Time%s\n", err)
+				os.Exit(1)
+
+			}
+			KafkaUtils.CopyMessages(*consumerConfigMap, *producerConfigMap, inputTopic, outputTopic, continuous, offsetTime, flags)
+		} else {
+			KafkaUtils.CopyMessages(*consumerConfigMap, *producerConfigMap, inputTopic, outputTopic, continuous, time.Time{}, flags)
+		}
+
 	},
 }
-var inputBootstrap string
-var outputBootstrap string
-var inputTopic string
-var outputTopic string
-
-var continuous bool
-var producerConfig string
-var consumerConfig string
-var copyFormat string
-var copyFilter string
-
-var inputArgs []string
-var outputArgs []string
-
-var copySchemaRegistryUrl string
-var copySchemaRegistryUser string
-var copySchemaRegistryPass string
 
 func init() {
 	rootCmd.AddCommand(copyCmd)
@@ -106,6 +101,8 @@ func init() {
 	copyCmd.Flags().StringVar(&copySchemaRegistryUrl, "sr-url", "", "Schema Registry Url")
 	copyCmd.Flags().StringVar(&copySchemaRegistryUser, "sr-user", "", "Schema Registry User")
 	copyCmd.Flags().StringVar(&copySchemaRegistryPass, "sr-pass", "", "Schema Registry Password")
+
+	copyCmd.Flags().StringVar(&offsetTimestamp, "offset-timestamp", "", "Offset Timestamp to start in RFC3339 format YYYY-MM-DDTHH:mm:SSZ")
 
 	copyCmd.Flags().StringArrayVarP(&inputArgs, "iarg", "I", make([]string, 0), "Pass optional Arguments. iargs are passed as -I key=value -X key=value")
 	copyCmd.Flags().StringArrayVarP(&outputArgs, "oarg", "O", make([]string, 0), "Pass optional Arguments. oargs are passed as -O key=value -X key=value")

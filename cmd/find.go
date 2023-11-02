@@ -11,6 +11,7 @@ import (
 	KafkaUtils "kcmd/kafka"
 	"os"
 	"strings"
+	"time"
 )
 
 // grepCmd represents the find command
@@ -68,10 +69,20 @@ var findCmd = &cobra.Command{
 		if schemaRegistryPassword != "" {
 			flags["schema.registry.password"] = schemaRegistryPassword
 		}
-
+		offsetTime := time.Time{}
+		if offsetTimestamp != "" {
+			offsetTime, err = time.Parse(time.RFC3339, offsetTimestamp)
+			if err != nil {
+				fmt.Printf("Error Formatting Time%s\n", err)
+				os.Exit(1)
+			}
+		}
 		config, err := KafkaUtils.GetConsumerConfig(bootstrap, propertyXargs)
-
-		var messages = KafkaUtils.FindMessageExpr(*config, topic, expression, inputFormat, flags)
+		if err != nil {
+			fmt.Printf("Error in consumer config %s\n", err)
+			os.Exit(1)
+		}
+		var messages = KafkaUtils.FindMessageExpr(*config, topic, expression, inputFormat, offsetTime, flags)
 
 		//Output the results
 		switch output {
@@ -88,13 +99,6 @@ var findCmd = &cobra.Command{
 		//fmt.Println("find called")
 	},
 }
-var expression string
-var topic string
-var schemaRegistryUrl string
-var schemaRegistryUsername string
-var schemaRegistryPassword string
-var inputFormat string
-var xargs []string
 
 func init() {
 	rootCmd.AddCommand(findCmd)
@@ -110,4 +114,5 @@ func init() {
 	findCmd.Flags().StringVarP(&schemaRegistryUsername, "sr-user", "u", "", "Schema Registry Username")
 	findCmd.Flags().StringVarP(&schemaRegistryPassword, "sr-pass", "p", "", "Schema Registry Password")
 	findCmd.Flags().StringArrayVarP(&xargs, "xarg", "X", make([]string, 0), "Pass optional Arguments. xargs are passed as -X key=value -X key=value")
+	findCmd.Flags().StringVar(&offsetTimestamp, "offset-timestamp", "", "Offset Timestamp in RFC3339 format 2023-10-10T00:00:00Z")
 }

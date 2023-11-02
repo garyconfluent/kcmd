@@ -5,13 +5,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/ext"
-	"github.com/jedib0t/go-pretty/v6/table"
-	"github.com/montanaflynn/stats"
-	"github.com/riferrei/srclient"
-	"github.com/xyproto/randomstring"
 	"log"
 	"os"
 	"os/signal"
@@ -22,9 +15,19 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/confluentinc/confluent-kafka-go/v2/schemaregistry"
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
+	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/montanaflynn/stats"
+	"github.com/riferrei/srclient"
+	"github.com/xyproto/randomstring"
 )
 
 var TopicCountFields = []interface{}{"Topic", "Count"}
+var TopicFields = []interface{}{"Topic", "Partitions"}
 var MessageFields = []interface{}{"Key", "Value", "Timestamp", "Partition", "Offset"}
 var TopicStatisticFields = []interface{}{"Topic", "Count", "Min", "Max", "Median"}
 var celEnvOptions = []cel.EnvOption{
@@ -86,7 +89,7 @@ func GetAdminConfig(bootstrap string, propertyArgs map[string]string) (*kafka.Co
 	return config, nil
 }
 
-// Return the Consumer Config and then optionally add custom parameters
+// GetConsumerConfig Return the Consumer Config and then optionally add custom parameters
 func GetConsumerConfig(bootstrap string, propertyArgs map[string]string) (*kafka.ConfigMap, error) {
 	config := &kafka.ConfigMap{}
 	if err := config.SetKey("bootstrap.servers", bootstrap); err != nil {
@@ -104,6 +107,9 @@ func GetConsumerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 	if err := config.SetKey("enable.partition.eof", true); err != nil {
 		return nil, err
 	}
+	if err := config.SetKey("go.application.rebalance.enable", true); err != nil { //Defer Assignment to client app {
+		return nil, err
+	}
 	// see explanation: https://www.confluent.io/blog/incremental-cooperative-rebalancing-in-kafka/
 	if err := config.SetKey("partition.assignment.strategy", "cooperative-sticky"); err != nil {
 		return nil, err
@@ -116,7 +122,7 @@ func GetConsumerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 	return config, nil
 }
 
-// Return the COnsumer Config and then optionally add custom parameters
+// GetProducerConfig Return the COnsumer Config and then optionally add custom parameters
 func GetProducerConfig(bootstrap string, propertyArgs map[string]string) (*kafka.ConfigMap, error) {
 	config := &kafka.ConfigMap{}
 	if err := config.SetKey("bootstrap.servers", bootstrap); err != nil {
@@ -125,7 +131,9 @@ func GetProducerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 	if err := config.SetKey("client.id", "kafkacommand"); err != nil {
 		return nil, err
 	}
-
+	if err := config.SetKey("linger.ms", "200"); err != nil {
+		return nil, err
+	}
 	for key, value := range propertyArgs {
 		if err := config.SetKey(key, value); err != nil {
 			fmt.Printf("Error Setting Property %s\n", err)
@@ -135,7 +143,7 @@ func GetProducerConfig(bootstrap string, propertyArgs map[string]string) (*kafka
 	return config, nil
 }
 
-// List of Topics and Partitions
+// ListTopics List of Topics and Partitions
 func ListTopics(config kafka.ConfigMap) []TopicPartition {
 	ac, err := kafka.NewAdminClient(&config)
 	if err != nil {
@@ -155,7 +163,7 @@ func ListTopics(config kafka.ConfigMap) []TopicPartition {
 	return topicNames
 }
 
-// List of topics and Count number of messages.
+// ListTopicsAndCount List of topics and Count number of messages.
 func ListTopicsAndCount(config kafka.ConfigMap, topics []TopicPartition, estimate bool) []TopicCount {
 	topicCounts := []TopicCount{}
 	var wg sync.WaitGroup
@@ -183,7 +191,7 @@ func ListTopicsAndCount(config kafka.ConfigMap, topics []TopicPartition, estimat
 	return topicCounts
 }
 
-// List of topics and Output Statitics
+// ListTopicsAndStatistics List of topics and Output Statitics
 func ListTopicsAndStatistics(config kafka.ConfigMap, topics []TopicPartition) []TopicStatistic {
 	var topicStats []TopicStatistic
 	var wg sync.WaitGroup
@@ -206,7 +214,7 @@ func ListTopicsAndStatistics(config kafka.ConfigMap, topics []TopicPartition) []
 	return topicStats
 }
 
-// Create a Consumer and executes count
+// CountMessages Create a Consumer and executes count
 func CountMessages(config kafka.ConfigMap, topic string, partitions int) TopicCount {
 	//fmt.Printf("Counting Topic:%s", topic)
 	run := true
@@ -247,7 +255,7 @@ func CountMessages(config kafka.ConfigMap, topic string, partitions int) TopicCo
 	return TopicCount{Topic: topic, Count: ctr}
 }
 
-// Create a Consumer and executes statistics
+// StatMessage Create a Consumer and executes statistics
 func StatMessage(config kafka.ConfigMap, topic string, partitions int) TopicStatistic {
 	//fmt.Printf("Counting Topic:%s", topic)
 	run := true
@@ -310,7 +318,7 @@ func average(xs []float64) float64 {
 	return total / float64(len(xs))
 }
 
-// Function does a fast count by using offsets and watermarks
+// FastCountMessages Function does a fast count by using offsets and watermarks
 func FastCountMessages(config kafka.ConfigMap, topic string, partitions int) TopicCount {
 
 	var consumer, err = kafka.NewConsumer(&config)
@@ -333,6 +341,7 @@ func FastCountMessages(config kafka.ConfigMap, topic string, partitions int) Top
 	count := int64(0)
 	for _, part := range parts {
 		low, high, err := consumer.QueryWatermarkOffsets(topic, part.ID, 10000)
+
 		if err != nil {
 			return TopicCount{topic, -1}
 		}
@@ -345,8 +354,8 @@ func FastCountMessages(config kafka.ConfigMap, topic string, partitions int) Top
 	return TopicCount{topic, int(count)}
 }
 
-// Grep messages based on a regex pattern, optionally deserializes output based on schema registry
-func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string, flags map[string]string) []MessageInfo {
+// GrepMessage Grep messages based on a regex pattern, optionally deserializes output based on schema registry
+func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string, fromOffset time.Time, flags map[string]string) []MessageInfo {
 	//Compile regex
 	regexFind, rerr := regexp.Compile(reg)
 	if rerr != nil {
@@ -355,7 +364,8 @@ func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string,
 	}
 
 	var consumer, err = kafka.NewConsumer(&config)
-	err = consumer.Subscribe(topic, nil)
+	err = consumer.Subscribe(topic, RebalanceCallback)
+	offsetTimestamp = fromOffset
 	if err != nil {
 		fmt.Println("Failed to subscribe topic: %s\n", err)
 		os.Exit(1)
@@ -463,14 +473,15 @@ func GrepMessage(config kafka.ConfigMap, topic string, reg string, input string,
 }
 
 // CopyMessages Copy messages from one broker/topic to another broker/topic
-func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap, inputTopic string, outputTopic string, continuous bool, flags map[string]string) {
+func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap, inputTopic string, outputTopic string, continuous bool, fromOffset time.Time, flags map[string]string) {
+	startTime := time.Now()
 	var consumer, err = kafka.NewConsumer(&consumerConfig)
 	if err != nil {
 		fmt.Println("Failed to create consumer Err: %s\n", err)
 		//run = false
 		os.Exit(1)
 	}
-	err = consumer.Subscribe(inputTopic, nil)
+	err = consumer.Subscribe(inputTopic, RebalanceCallback)
 
 	var producer, perr = kafka.NewProducer(&producerConfig)
 	if err != nil {
@@ -501,6 +512,7 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 	}
 
 	//Initialize any args passed in
+	offsetTimestamp = fromOffset
 	var input = flags["copyFormat"]
 	var expr = "true" //Default to true since it needs to evaluate even if not passed
 	if flags["copyFilter"] != "" {
@@ -554,11 +566,6 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 					m := ev
 					if m.TopicPartition.Error != nil {
 						fmt.Printf("Delivery failed: %v\n", m.TopicPartition.Error)
-					} else {
-						if processed%1000 == 0 {
-							fmt.Printf("Delivered message to topic %s [%d] at offset %v\n",
-								*m.TopicPartition.Topic, m.TopicPartition.Partition, m.TopicPartition.Offset)
-						}
 					}
 				default:
 					fmt.Printf("Ignored event: %s\n", ev)
@@ -648,7 +655,7 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 			}
 		}
 	}
-	log.Printf("Shutting Down Processed: %d, Copied: %d\n", processed, sent)
+
 	cerr := consumer.Close()
 	if cerr != nil {
 		fmt.Println(cerr)
@@ -656,14 +663,16 @@ func CopyMessages(consumerConfig kafka.ConfigMap, producerConfig kafka.ConfigMap
 	//Flush any existing messages
 	producer.Flush(10000)
 	producer.Close()
+	endTime := time.Now()
+	log.Printf("Done Processed: %d, Copied: %d Elapsed:%s \n", processed, sent, endTime.Sub(startTime))
 }
 
 // FindMessageExpr Finds messages based on a CEL Expression, optionally deserializes output based on schema registry
-func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input string, flags map[string]string) []MessageInfo {
+func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input string, fromOffset time.Time, flags map[string]string) []MessageInfo {
 	//Compile expression
-
+	offsetTimestamp = fromOffset
 	var consumer, err = kafka.NewConsumer(&config)
-	err = consumer.Subscribe(topic, nil)
+	err = consumer.Subscribe(topic, RebalanceCallback)
 	if err != nil {
 		fmt.Println("Failed to subscribe topic: %s\n", err)
 		//run = false
@@ -692,6 +701,8 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 	srpass := flags["schema.registry.password"]
 	srClient := CreateSchemaRegistry(sru, sruser, srpass)
 
+	//schemaRegistry, err := GetConfluentSchemaRegistry(sru, sruser, srpass, make(map[string]string))
+	//deser, err := protobuf.NewDeserializer(schemaRegistry, serde.ValueSerde, protobuf.NewDeserializerConfig())
 	//Compile Expression and build structures to evaluate
 	prg, err := CreateCelProgram(expr)
 	if err != nil {
@@ -724,8 +735,9 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 				case "json":
 					_ = json.Unmarshal(e.Value, &msgValue)
 				case "proto":
-					fmt.Println("Cannot support protobuf at this time")
-					os.Exit(1)
+					_ = json.Unmarshal(e.Value, &msgValue)
+				//fmt.Println("Cannot support protobuf at this time")
+				//os.Exit(1)
 				case "avro":
 					value := GetAvroMessage(srClient, e)
 					_ = json.Unmarshal(value, &msgValue)
@@ -773,6 +785,63 @@ func FindMessageExpr(config kafka.ConfigMap, topic string, expr string, input st
 	return messages
 }
 
+// Global internal var to hold offset since rebalance enabled is not passable in callback
+var offsetTimestamp time.Time
+
+// RebalanceCallback Handles the rebalance callback and shifts the offset to the given timestamp if offsetTimestamp.isZero() == false
+func RebalanceCallback(c *kafka.Consumer, event kafka.Event) error {
+
+	switch ev := event.(type) {
+	case kafka.AssignedPartitions:
+		partitions := ev.Partitions
+		if offsetTimestamp.IsZero() == false {
+			offsetMillis := offsetTimestamp.UnixMilli()
+			partitions, _ = ResetPartitionOffsetsToTimestamp(c, ev.Partitions, offsetMillis)
+		}
+
+		// The application may update the start .Offset of each
+		// assigned partition and then call IncrementalAssign().
+		// Even though this example does not alter the offsets we
+		// provide the call to IncrementalAssign() as an example.
+		err := c.IncrementalAssign(partitions)
+		if err != nil {
+			panic(err)
+		}
+
+	case kafka.RevokedPartitions:
+		/*	fmt.Fprintf(os.Stderr,
+				"%% %s rebalance: %d partition(s) revoked: %v\n",
+				c.GetRebalanceProtocol(), len(ev.Partitions),
+				ev.Partitions)
+			if c.AssignmentLost() {
+				// Our consumer has been kicked out of the group and the
+				// entire assignment is thus lost.
+				fmt.Fprintf(os.Stderr, "%% Current assignment lost!\n")
+			}
+		*/
+		// The client automatically calls IncrementalUnassign() unless
+		// the callback has already called that method.
+	}
+
+	return nil
+}
+
+// ResetPartitionOffsetsToTimestamp Resets partitions to a timestamp millis
+func ResetPartitionOffsetsToTimestamp(c *kafka.Consumer, partitions []kafka.TopicPartition, timestamp int64) ([]kafka.TopicPartition, error) {
+	var prs []kafka.TopicPartition
+	for _, par := range partitions {
+		prs = append(prs, kafka.TopicPartition{Topic: par.Topic, Partition: par.Partition, Offset: kafka.Offset(timestamp)})
+	}
+
+	updateParts, err := c.OffsetsForTimes(prs, 5000)
+	if err != nil {
+		log.Printf("Failed to reset offsets to supplied timestamp due to error: %v\n", err)
+		return partitions, err
+	}
+
+	return updateParts, nil
+}
+
 // CreateSchemaRegistry Creates Schema Registry Client
 func CreateSchemaRegistry(sru string, sruser string, srpass string) *srclient.SchemaRegistryClient {
 	srClient := srclient.CreateSchemaRegistryClient(sru)
@@ -810,12 +879,32 @@ func CreateCelProgram(expr string) (cel.Program, error) {
 func GetAvroMessage(srClient *srclient.SchemaRegistryClient, message *kafka.Message) []byte {
 	schemaId := binary.BigEndian.Uint32(message.Value[1:5])
 	schema, err := srClient.GetSchema(int(schemaId))
+	//fmt.Println(int(schemaId))
 	if err != nil {
 		fmt.Sprintf("Error getting the schema with id '%d' %s", schemaId, err)
 	}
 	native, _, _ := schema.Codec().NativeFromBinary(message.Value[5:])
 	value, _ := schema.Codec().TextualFromNative(nil, native)
 	return value
+}
+
+func GetConfluentSchemaRegistry(srurl string, sruser string, srpass string, srargs map[string]string) (schemaregistry.Client, error) {
+	config := schemaregistry.NewConfig(srurl)
+	config.BasicAuthUserInfo = sruser + ":" + srpass
+	//Create srargs parameter passing
+	config.SaslMechanism = srargs["SaslMechanism"]
+	config.SaslPassword = srargs["SaslPassword"]
+	config.SaslUsername = srargs["SaslUsername"]
+	config.SslKeyLocation = srargs["SslKeyLocation"]
+	config.SslCertificateLocation = srargs["SslCertificateLocation"]
+	config.SslCaLocation = srargs["SslCaLocation"]
+	config.SslDisableEndpointVerification, _ = strconv.ParseBool(srargs["SslDisableEndpointVerification"])
+
+	schemaRegistry, err := schemaregistry.NewClient(config)
+	if err != nil {
+		fmt.Printf("Error Getting Confluent Schema Registry %s", err)
+	}
+	return schemaRegistry, nil
 }
 
 // ConsumerGroupFields Consumer Group Types and interfaces
@@ -850,13 +939,20 @@ func ListConsumerGroups(config kafka.ConfigMap, filter string) []ConsumerGroup {
 		fmt.Println("Failed to compile regex")
 		os.Exit(1)
 	}
+
 	// Print results
 	groupList := make([]ConsumerGroup, 0)
 	groups := listGroupRes.Valid
 	for _, group := range groups {
 		var groupId = group.GroupID
 		if filterExpr.MatchString(groupId) {
+			if err != nil {
+				fmt.Println("Failed Describe Consumer Group")
+				os.Exit(1)
+			}
+
 			groupList = append(groupList, ConsumerGroup{group.GroupID, group.State.String(), group.IsSimpleConsumerGroup})
+
 		}
 	}
 	return groupList
@@ -886,6 +982,65 @@ func DeleteConsumerGroup(config kafka.ConfigMap, groups []string) kafka.DeleteCo
 		os.Exit(1)
 	}
 	return res
+}
+
+// CreateTopic Creates a topic with basic settings
+func CreateTopic(config kafka.ConfigMap, topic string, partitions int, replicationFactor int, timeOut int, topicArguments map[string]string) {
+	ac, err := kafka.NewAdminClient(&config)
+	if err != nil {
+		fmt.Printf("Failed to create Admin client: %s\n", err)
+		os.Exit(1)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	results, err := ac.CreateTopics(
+		ctx,
+		// Multiple topics can be created simultaneously
+		// by providing more TopicSpecification structs here.
+		[]kafka.TopicSpecification{{
+			Topic:             topic,
+			NumPartitions:     partitions,
+			ReplicationFactor: replicationFactor}},
+		// Admin options
+		kafka.SetAdminOperationTimeout(time.Second*time.Duration(timeOut)))
+	if err != nil {
+		fmt.Printf("Failed to create topic: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print results
+	for _, result := range results {
+		fmt.Printf("%s Created \n", result)
+	}
+
+	ac.Close()
+}
+func DeleteTopic(config kafka.ConfigMap, topics []string, timeOut int) {
+
+	ac, err := kafka.NewAdminClient(&config)
+	if err != nil {
+		fmt.Printf("Failed to create Admin client: %s\n", err)
+		os.Exit(1)
+	}
+
+	// Contexts are used to abort or limit the amount of time
+	// the Admin call blocks waiting for a result.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	results, err := ac.DeleteTopics(ctx, topics, kafka.SetAdminOperationTimeout(time.Second*time.Duration(timeOut)))
+	if err != nil {
+		fmt.Printf("Failed to delete topics: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Print results
+	for _, result := range results {
+		fmt.Printf("%s Deleted\n", result)
+	}
+
+	ac.Close()
 }
 
 // PrintTable Prints a struct to a table

@@ -14,13 +14,6 @@ import (
 	"strings"
 )
 
-var bootstrap string
-var apiKey string
-var secretKey string
-var output string
-var filter string
-var estimate bool
-
 // countCmd represents the count command
 var countCmd = &cobra.Command{
 	Use:   "count",
